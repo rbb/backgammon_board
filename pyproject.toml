@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backgammon-board"
+version = "0.1.0"
+description = "Generate backgammon board SVG drawings"
+requires-python = ">=3.10"
+dependencies = [
+    "svgwrite>=1.4,<2",
+]
+
+[project.scripts]
+build-bg-board = "build_bg_board:main"
+
+[tool.setuptools]
+py-modules = ["build_bg_board"]
