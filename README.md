@@ -32,6 +32,8 @@ build-bg-board --help
 | `--checker-size MM` | `32` | Checker diameter; scales the whole board proportionally |
 | `--template-margin MM` | `0.5` | Expansion around checker stacks in the template layer (at default checker scale) |
 | `--template-arc-ratio RATIO` | `1/6` | Horizontal arc inset for template outlines, as a fraction of checker size |
+| `--rosette` | off | Add a 21-set hex rosette centered in each playing half |
+| `--rosette-ratio RATIO` | `1` | With `--rosette`, set diameter as a checker-size ratio; values above 1 expand board height by the excess diameter |
 
 Example — regenerate at default scale:
 
@@ -40,6 +42,13 @@ uv run build-bg-board --out backgammon_board.svg
 ```
 
 At the default checker size the canvas is **600 × 450 mm**.
+
+Use a larger rosette while preserving clearance between the opposing pip and
+checker layouts:
+
+```bash
+uv run build-bg-board --rosette --rosette-ratio 2
+```
 
 ## Output layers
 

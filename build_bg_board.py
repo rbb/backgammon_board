@@ -10,12 +10,15 @@ from pathlib import Path
 
 import svgwrite
 
+from build_hex_rosette import HexRosetteParams, add_hex_rosette
+
 
 DEFAULT_OUTPUT = Path("backgammon_board.svg")
 SVG_SIZE = (600, 450)
 DEFAULT_CHECKER_SIZE = 32.0
 DEFAULT_TEMPLATE_MARGIN = 0.5
 DEFAULT_TEMPLATE_ARC_RATIO = 1 / 6
+ROSETTE_SETS = 21
 LINE_WIDTH = 0.301517
 PIP_BASE_LEFT = 55.769252
 PIP_BASE_TOP_Y = 117.47435
@@ -127,6 +130,19 @@ def scale_factor(checker_size: float) -> float:
     return checker_size / DEFAULT_CHECKER_SIZE
 
 
+def board_height_expansion(checker_size: float, rosette_ratio: float) -> float:
+    """Return the extra board height needed for the requested rosette diameter."""
+    return max(0.0, checker_size * (rosette_ratio - 1.0))
+
+
+def side_vertical_offset(
+    side: str, checker_size: float, rosette_ratio: float
+) -> float:
+    """Move each board side away from the center by half the added height."""
+    expansion = board_height_expansion(checker_size, rosette_ratio)
+    return (-expansion / 2) if side == "top" else (expansion / 2)
+
+
 def pip_style() -> str:
     return (
         "fill:#2c5aa0;fill-opacity:0;stroke:#ff0000;"
@@ -218,7 +234,10 @@ def _matrix_string(matrix: tuple[float, float, float, float, float, float]) -> s
 
 
 def _pip_matrix(
-    side: str, pip_index: int, checker_size: float
+    side: str,
+    pip_index: int,
+    checker_size: float,
+    rosette_ratio: float = 1.0,
 ) -> tuple[float, float, float, float, float, float]:
     """Return a pip transform scaled in board space around the origin."""
     transforms = TOP_PIP_TRANSFORMS if side == "top" else BOTTOM_PIP_TRANSFORMS
@@ -226,16 +245,27 @@ def _pip_matrix(
     if side == "bottom":
         matrix = _compose_matrices(_matrix(BOTTOM_BOARD_TRANSFORM), matrix)
     scale = scale_factor(checker_size)
-    return _compose_matrices((scale, 0, 0, scale, 0, 0), matrix)
+    return _compose_matrices(
+        (
+            scale,
+            0,
+            0,
+            scale,
+            0,
+            side_vertical_offset(side, checker_size, rosette_ratio),
+        ),
+        matrix,
+    )
 
 
 def pip_cut_bounds(
     side: str,
     pip_index: int,
     checker_size: float = DEFAULT_CHECKER_SIZE,
+    rosette_ratio: float = 1.0,
 ) -> tuple[float, float, float, float]:
     """Return the board-space bounding box of a pip's cut path."""
-    matrix = _pip_matrix(side, pip_index, checker_size)
+    matrix = _pip_matrix(side, pip_index, checker_size, rosette_ratio)
     left, top, right, bottom = PIP_CUT_BOUNDS
     corners = (
         _transform_point(matrix, (left, top)),
@@ -250,10 +280,11 @@ def pip_cut_bounds(
 def pip_group_cut_bounds(
     pip_indices: range,
     checker_size: float = DEFAULT_CHECKER_SIZE,
+    rosette_ratio: float = 1.0,
 ) -> tuple[float, float, float, float]:
     """Return the board-space bounding box enclosing a six-pip group."""
     bounds = tuple(
-        pip_cut_bounds(side, index, checker_size)
+        pip_cut_bounds(side, index, checker_size, rosette_ratio)
         for side in ("top", "bottom")
         for index in pip_indices
     )
@@ -267,13 +298,16 @@ def pip_group_cut_bounds(
 
 def border_rectangles(
     checker_size: float,
+    rosette_ratio: float = 1.0,
 ) -> tuple[tuple[float, float, float, float], ...]:
     """Return inner rectangles followed by their touching outer frames."""
     inner_clearance = checker_size / 4
     outer_clearance = checker_size / 2
     inner_rectangles = []
     for pip_indices in (range(1, 7), range(7, 13)):
-        left, top, right, bottom = pip_group_cut_bounds(pip_indices, checker_size)
+        left, top, right, bottom = pip_group_cut_bounds(
+            pip_indices, checker_size, rosette_ratio
+        )
         left -= inner_clearance
         top -= inner_clearance
         right += inner_clearance
@@ -307,33 +341,50 @@ def border_rectangles(
     )
 
 
-def pip_group_horizontal_offset(pip_index: int, checker_size: float) -> float:
+def pip_group_horizontal_offset(
+    pip_index: int, checker_size: float, rosette_ratio: float = 1.0
+) -> float:
     """Keep the left group fixed and move the right group to touch it."""
     if pip_index <= 6:
         return 0.0
-    _, right_inner, _, _ = border_rectangles(checker_size)
+    _, right_inner, _, _ = border_rectangles(checker_size, rosette_ratio)
     right_group_left, _, _, _ = pip_group_cut_bounds(
-        range(7, 13), checker_size
+        range(7, 13), checker_size, rosette_ratio
     )
     return right_inner[0] - right_group_left + checker_size / 4
 
 
-def canvas_bounds(checker_size: float) -> tuple[float, float, float, float]:
+def canvas_bounds(
+    checker_size: float, rosette_ratio: float = 1.0
+) -> tuple[float, float, float, float]:
     """Return a canvas that includes both outer frames and the base SVG area."""
-    _, _, right_outer, left_outer = border_rectangles(checker_size)
+    _, _, right_outer, left_outer = border_rectangles(checker_size, rosette_ratio)
     outer_rectangles = (left_outer, right_outer)
     scale = scale_factor(checker_size)
+    expansion = board_height_expansion(checker_size, rosette_ratio)
     left = min(0.0, *(rectangle[0] for rectangle in outer_rectangles))
-    top = min(0.0, *(rectangle[1] for rectangle in outer_rectangles))
+    expanded_top = -expansion / 2 if expansion else 0.0
+    top = min(expanded_top, *(rectangle[1] for rectangle in outer_rectangles))
     right = max(
         SVG_SIZE[0] * scale,
         *(rectangle[0] + rectangle[2] for rectangle in outer_rectangles),
     )
     bottom = max(
-        SVG_SIZE[1] * scale,
+        SVG_SIZE[1] * scale + expansion / 2,
         *(rectangle[1] + rectangle[3] for rectangle in outer_rectangles),
     )
     return left, top, right - left, bottom - top
+
+
+def half_centers(
+    checker_size: float, rosette_ratio: float = 1.0
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return the centers of the left and right inner playing halves."""
+    left_inner, right_inner, _, _ = border_rectangles(checker_size, rosette_ratio)
+    return tuple(
+        (x + width / 2, y + height / 2)
+        for x, y, width, height in (left_inner, right_inner)
+    )
 
 
 def pip_anchor(
@@ -341,18 +392,22 @@ def pip_anchor(
     pip_index: int,
     horizontal_offset: float = 0.0,
     checker_size: float = DEFAULT_CHECKER_SIZE,
+    rosette_ratio: float = 1.0,
 ) -> tuple[float, float]:
     """Return the board-space center of a pip's flat base line."""
-    matrix = _pip_matrix(side, pip_index, checker_size)
+    matrix = _pip_matrix(side, pip_index, checker_size, rosette_ratio)
     x, y = _transform_point(matrix, PIP_FLAT_BASE_CENTER)
     return x + horizontal_offset, y
 
 
 def checker_stack_translation(
-    side: str, pip_index: int, checker_size: float
+    side: str,
+    pip_index: int,
+    checker_size: float,
+    rosette_ratio: float = 1.0,
 ) -> float:
     """Return the shift that makes the nearest checker tangent to a pip's V base."""
-    matrix = _pip_matrix(side, pip_index, checker_size)
+    matrix = _pip_matrix(side, pip_index, checker_size, rosette_ratio)
     direction = 1 if side == "top" else -1
     endpoint = _transform_point(matrix, PIP_FLAT_BASE_CENTER)
     tip = _transform_point(
@@ -369,9 +424,11 @@ def checker_stack_translation(
     return tangent_center_y - (endpoint[1] + direction * checker_size / 2)
 
 
-def bottom_checker_stack_translation(pip_index: int, checker_size: float) -> float:
+def bottom_checker_stack_translation(
+    pip_index: int, checker_size: float, rosette_ratio: float = 1.0
+) -> float:
     """Return the downward shift that makes a checker tangent to the pip's V base."""
-    return checker_stack_translation("bottom", pip_index, checker_size)
+    return checker_stack_translation("bottom", pip_index, checker_size, rosette_ratio)
 
 
 def checker_centers(
@@ -380,6 +437,7 @@ def checker_centers(
     count: int,
     checker_size: float,
     horizontal_offset: float = 0.0,
+    rosette_ratio: float = 1.0,
 ) -> tuple[tuple[float, float], ...]:
     """Place a stack from the pip's flat base inward at one-diameter intervals."""
     anchor_x, anchor_y = pip_anchor(
@@ -387,6 +445,7 @@ def checker_centers(
         pip_index,
         horizontal_offset=horizontal_offset,
         checker_size=checker_size,
+        rosette_ratio=rosette_ratio,
     )
     direction = 1 if side == "top" else -1
     radius = checker_size / 2
@@ -461,16 +520,20 @@ def checker_template_outline(
     return " ".join(path) + " Z"
 
 
-def verify_checker_layout(checker_size: float) -> None:
+def verify_checker_layout(checker_size: float, rosette_ratio: float = 1.0) -> None:
     """Assert base tangency and one-diameter spacing for every stack."""
     radius = checker_size / 2
     for side, pip_index, count in CHECKER_STACKS:
         anchor_x, anchor_y = pip_anchor(
-            side, pip_index, checker_size=checker_size
+            side, pip_index, checker_size=checker_size, rosette_ratio=rosette_ratio
         )
-        centers = checker_centers(side, pip_index, count, checker_size)
+        centers = checker_centers(
+            side, pip_index, count, checker_size, rosette_ratio=rosette_ratio
+        )
         direction = 1 if side == "top" else -1
-        translation = checker_stack_translation(side, pip_index, checker_size)
+        translation = checker_stack_translation(
+            side, pip_index, checker_size, rosette_ratio
+        )
         translated_centers = tuple((x, y + translation) for x, y in centers)
         first_x, first_y = translated_centers[0]
         assert abs(first_x - anchor_x) < 1e-9
@@ -487,6 +550,8 @@ def build_board(
     checker_size: float = DEFAULT_CHECKER_SIZE,
     template_margin: float = DEFAULT_TEMPLATE_MARGIN,
     template_arc_ratio: float = DEFAULT_TEMPLATE_ARC_RATIO,
+    rosette: bool = False,
+    rosette_ratio: float = 1.0,
 ) -> None:
     if checker_size <= 0:
         raise ValueError("checker_size must be greater than zero")
@@ -494,9 +559,14 @@ def build_board(
         raise ValueError("template_margin must not be negative")
     if template_arc_ratio <= 0:
         raise ValueError("template_arc_ratio must be greater than zero")
-    verify_checker_layout(checker_size)
+    if rosette_ratio <= 0:
+        raise ValueError("rosette_ratio must be greater than zero")
+    layout_rosette_ratio = rosette_ratio if rosette else 1.0
+    verify_checker_layout(checker_size, layout_rosette_ratio)
     scaled_template_margin = template_margin * scale_factor(checker_size)
-    canvas_x, canvas_y, canvas_width, canvas_height = canvas_bounds(checker_size)
+    canvas_x, canvas_y, canvas_width, canvas_height = canvas_bounds(
+        checker_size, layout_rosette_ratio
+    )
     drawing = svgwrite.Drawing(
         str(output),
         size=(f"{canvas_width:g}mm", f"{canvas_height:g}mm"),
@@ -510,12 +580,23 @@ def build_board(
             "xmlns:inkscape": "http://www.inkscape.org/namespaces/inkscape",
         }
     )
+    drawing.add(
+        drawing.rect(
+            insert=(canvas_x, canvas_y),
+            size=(canvas_width, canvas_height),
+            id="board_background",
+            fill="white",
+            stroke="none",
+        )
+    )
 
     pip_etch_layer = add_layer(drawing, "layer1", "Pip Etch")
     pip_cut_layer = add_layer(drawing, "layer3", "Pip Cut")
     for index, _ in enumerate(TOP_PIP_TRANSFORMS):
         pip_index = index + 1
-        horizontal_offset = pip_group_horizontal_offset(pip_index, checker_size)
+        horizontal_offset = pip_group_horizontal_offset(
+            pip_index, checker_size, layout_rosette_ratio
+        )
         add_pip(
             pip_etch_layer,
             pip_cut_layer,
@@ -523,14 +604,18 @@ def build_board(
             _matrix_string(
                 _compose_matrices(
                     (1, 0, 0, 1, horizontal_offset, 0),
-                    _pip_matrix("top", pip_index, checker_size),
+                    _pip_matrix(
+                        "top", pip_index, checker_size, layout_rosette_ratio
+                    ),
                 )
             ),
         )
 
     for index, _ in enumerate(BOTTOM_PIP_TRANSFORMS):
         pip_index = index + 1
-        horizontal_offset = pip_group_horizontal_offset(pip_index, checker_size)
+        horizontal_offset = pip_group_horizontal_offset(
+            pip_index, checker_size, layout_rosette_ratio
+        )
         add_pip(
             pip_etch_layer,
             pip_cut_layer,
@@ -538,16 +623,35 @@ def build_board(
             _matrix_string(
                 _compose_matrices(
                     (1, 0, 0, 1, horizontal_offset, 0),
-                    _pip_matrix("bottom", pip_index, checker_size),
+                    _pip_matrix(
+                        "bottom", pip_index, checker_size, layout_rosette_ratio
+                    ),
                 )
             ),
         )
+
+    if rosette:
+        rosette_layer = add_layer(drawing, "layer7", "Rosette")
+        for index, (center_x, center_y) in enumerate(
+            half_centers(checker_size, layout_rosette_ratio), start=1
+        ):
+            group = svgwrite.container.Group(id=f"rosette_{index}", debug=False)
+            add_hex_rosette(
+                group,
+                HexRosetteParams(
+                    diameter=checker_size * rosette_ratio,
+                    sets=ROSETTE_SETS,
+                    center_x=center_x,
+                    center_y=center_y,
+                ),
+            )
+            rosette_layer.add(group)
 
     checkers = add_layer(drawing, "layer4", "Checkers")
     for group_index, (side, pip_index, count) in enumerate(CHECKER_STACKS, start=1):
         checker_group = svgwrite.container.Group(id=f"checker_stack_{group_index}", debug=False)
         checker_group.attribs["transform"] = (
-            f"translate(0,{checker_stack_translation(side, pip_index, checker_size):g})"
+            f"translate(0,{checker_stack_translation(side, pip_index, checker_size, layout_rosette_ratio):g})"
         )
         for checker_index, center in enumerate(
             checker_centers(
@@ -555,7 +659,10 @@ def build_board(
                 pip_index,
                 count,
                 checker_size,
-                pip_group_horizontal_offset(pip_index, checker_size),
+                pip_group_horizontal_offset(
+                    pip_index, checker_size, layout_rosette_ratio
+                ),
+                layout_rosette_ratio,
             ),
             start=1,
         ):
@@ -571,7 +678,7 @@ def build_board(
 
     checker_templates = add_layer(drawing, "layer6", "Checker Template")
     for border_index, (x, y, width, height) in enumerate(
-        border_rectangles(checker_size)[:2], start=1
+        border_rectangles(checker_size, layout_rosette_ratio)[:2], start=1
     ):
         inset_width = width - 2 * scaled_template_margin
         inset_height = height - 2 * scaled_template_margin
@@ -592,7 +699,10 @@ def build_board(
             pip_index,
             count,
             checker_size,
-            pip_group_horizontal_offset(pip_index, checker_size),
+            pip_group_horizontal_offset(
+                pip_index, checker_size, layout_rosette_ratio
+            ),
+            layout_rosette_ratio,
         )
         checker_templates.add(
             svgwrite.path.Path(
@@ -604,7 +714,7 @@ def build_board(
                     template_arc_ratio,
                 ),
                 transform=(
-                    f"translate(0,{checker_stack_translation(side, pip_index, checker_size):g})"
+                    f"translate(0,{checker_stack_translation(side, pip_index, checker_size, layout_rosette_ratio):g})"
                 ),
                 style=cut_style(),
                 debug=False,
@@ -613,7 +723,7 @@ def build_board(
 
     border_layer = add_layer(drawing, "layer5", "Border")
     for index, (x, y, width, height) in enumerate(
-        border_rectangles(checker_size), start=1
+        border_rectangles(checker_size, layout_rosette_ratio), start=1
     ):
         border_layer.add(
             drawing.rect(
@@ -679,6 +789,24 @@ def parse_args() -> argparse.Namespace:
             f"(default: {DEFAULT_TEMPLATE_ARC_RATIO:g})"
         ),
     )
+    parser.add_argument(
+        "--rosette",
+        action="store_true",
+        help=(
+            "add a hex rosette centered in each board half "
+            f"(sets={ROSETTE_SETS})"
+        ),
+    )
+    parser.add_argument(
+        "--rosette-ratio",
+        type=positive_size,
+        default=1.0,
+        metavar="RATIO",
+        help=(
+            "with --rosette, set diameter as a checker-size ratio; values "
+            "above 1 expand board height by the excess diameter (default: 1)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -689,6 +817,8 @@ def main() -> None:
         checker_size=arguments.checker_size,
         template_margin=arguments.template_margin,
         template_arc_ratio=arguments.template_arc_ratio,
+        rosette=arguments.rosette,
+        rosette_ratio=arguments.rosette_ratio,
     )
     print(f"Wrote {arguments.out}")
 

@@ -46,11 +46,16 @@ class HexRosetteParams:
     fill_last_set: bool = True
     stroke_width: float = DEFAULT_STROKE_WIDTH
     fill_color: str = DEFAULT_FILL_COLOR
+    center_x: float | None = None
+    center_y: float | None = None
 
     @property
     def center(self) -> Point:
         half = self.diameter / 2
-        return (half, half)
+        return (
+            half if self.center_x is None else self.center_x,
+            half if self.center_y is None else self.center_y,
+        )
 
     @property
     def outer_radius(self) -> float:
@@ -333,7 +338,7 @@ def color_hex_edges(
 
 
 def add_line(
-    drawing: svgwrite.Drawing,
+    parent: svgwrite.base.BaseElement,
     a: Point,
     b: Point,
     *,
@@ -342,8 +347,8 @@ def add_line(
 ) -> None:
     if segment_length(a, b) < _EPS:
         return
-    drawing.add(
-        drawing.line(
+    parent.add(
+        svgwrite.shapes.Line(
             start=a,
             end=b,
             stroke=stroke,
@@ -354,14 +359,14 @@ def add_line(
 
 
 def add_filled_hex(
-    drawing: svgwrite.Drawing,
+    parent: svgwrite.base.BaseElement,
     center: Point,
     radius: float,
     rotation_deg: float,
     fill: str,
 ) -> None:
-    drawing.add(
-        drawing.polygon(
+    parent.add(
+        svgwrite.shapes.Polygon(
             points=hex_vertices(center[0], center[1], radius, rotation_deg),
             fill=fill,
             stroke="none",
@@ -369,18 +374,15 @@ def add_filled_hex(
     )
 
 
-def write_svg(params: HexRosetteParams) -> Path:
-    size = params.diameter
+def add_hex_rosette(
+    parent: svgwrite.base.BaseElement,
+    params: HexRosetteParams,
+) -> None:
+    """Draw the hex rosette into ``parent`` at ``params.center``."""
     center = params.center
     fill = paint_color(params.fill_color)
     radii = set_radii(params)
     outer_rotations = rotations_for_set(params, 0)
-
-    drawing = svgwrite.Drawing(
-        str(params.output),
-        size=(f"{size}mm", f"{size}mm"),
-        viewBox=f"0 0 {size} {size}",
-    )
 
     # Painter's algorithm: per hex, fill then strokes so later fills hide
     # underlying line segments that fall inside them.
@@ -391,7 +393,7 @@ def write_svg(params: HexRosetteParams) -> Path:
         draw_fill = params.fill_last_set or not is_last_set
         for rotation_deg in rotations:
             if draw_fill:
-                add_filled_hex(drawing, center, radius, rotation_deg, fill)
+                add_filled_hex(parent, center, radius, rotation_deg, fill)
             for a, b, color in color_hex_edges(
                 center,
                 radius,
@@ -400,7 +402,7 @@ def write_svg(params: HexRosetteParams) -> Path:
                 all_outer=not split_outer,
             ):
                 add_line(
-                    drawing,
+                    parent,
                     a,
                     b,
                     stroke=color,
@@ -408,8 +410,8 @@ def write_svg(params: HexRosetteParams) -> Path:
                 )
 
     if params.draw_outer_circle:
-        drawing.add(
-            drawing.circle(
+        parent.add(
+            svgwrite.shapes.Circle(
                 center=center,
                 r=params.outer_radius,
                 fill="none",
@@ -418,6 +420,16 @@ def write_svg(params: HexRosetteParams) -> Path:
             )
         )
 
+
+def write_svg(params: HexRosetteParams) -> Path:
+    """Write a standalone SVG whose canvas matches ``params.diameter``."""
+    size = params.diameter
+    drawing = svgwrite.Drawing(
+        str(params.output),
+        size=(f"{size}mm", f"{size}mm"),
+        viewBox=f"0 0 {size} {size}",
+    )
+    add_hex_rosette(drawing, params)
     drawing.save()
     return params.output
 
@@ -508,6 +520,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"outermost circumdiameter in millimeters (default: {DEFAULT_DIAMETER:g})",
     )
     geometry.add_argument(
+        "--center-x",
+        type=float,
+        default=None,
+        metavar="MM",
+        help="rosette center X in millimeters (default: diameter / 2)",
+    )
+    geometry.add_argument(
+        "--center-y",
+        type=float,
+        default=None,
+        metavar="MM",
+        help="rosette center Y in millimeters (default: diameter / 2)",
+    )
+    geometry.add_argument(
         "--outer-circle",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -564,6 +590,8 @@ def params_from_args(arguments: argparse.Namespace) -> HexRosetteParams:
         fill_last_set=arguments.fill_last_set,
         stroke_width=arguments.stroke_width,
         fill_color=arguments.fill_color,
+        center_x=arguments.center_x,
+        center_y=arguments.center_y,
     )
 
 
