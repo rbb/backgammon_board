@@ -13,6 +13,17 @@ dependencies = [
 
 [project.scripts]
 build-bg-board = "build_bg_board:main"
+build-rosette = "build_rosette_recursive_hex:main"
+build-rosette-recursive-hex = "build_rosette_recursive_hex:main"
+build-rosette-interlocking-hex-lattice = "build_rosette_interlocking_hex_Lattice_alg:main"
+build-rosette-mesh = "build_rosette_recursive_hex_mesh:main"
+build-hex-rosette = "build_hex_rosette:main"
 
 [tool.setuptools]
-py-modules = ["build_bg_board"]
+py-modules = [
+    "build_bg_board",
+    "build_rosette_recursive_hex",
+    "build_rosette_interlocking_hex_Lattice_alg",
+    "build_rosette_recursive_hex_mesh",
+    "build_hex_rosette",
+]
