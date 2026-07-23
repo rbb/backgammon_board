@@ -78,14 +78,14 @@ TOP_PIP_TRANSFORMS = (
     "matrix(1,0,0,-1.2428528,-27.238635,199.40949)",
     "matrix(1,0,0,-1.2428528,5.9598539,199.40949)",
     "matrix(1,0,0,-1.2428528,39.158334,199.40949)",
-    "matrix(1,0,0,-1.2428528,105.55531,199.40949)",
     "matrix(1,0,0,-1.2428528,72.356829,199.40949)",
+    "matrix(1,0,0,-1.2428528,105.55531,199.40949)",
     "matrix(1,0,0,-1.2428528,138.75378,199.40949)",
     "matrix(1,0,0,-1.2428528,203.9539,199.38146)",
     "matrix(1,0,0,-1.2428528,237.15239,199.38146)",
     "matrix(1,0,0,-1.2428528,270.35087,199.38146)",
-    "matrix(1,0,0,-1.2428528,336.74785,199.38146)",
     "matrix(1,0,0,-1.2428528,303.54936,199.38146)",
+    "matrix(1,0,0,-1.2428528,336.74785,199.38146)",
     "matrix(1,0,0,-1.2428528,369.94631,199.38146)",
 )
 BOTTOM_BOARD_TRANSFORM = "matrix(1,0,0,-1,-291.27935,546.7251)"
@@ -93,14 +93,14 @@ BOTTOM_PIP_TRANSFORMS = (
     "matrix(1,0,0,-1.2428528,264.07377,317.57232)",
     "matrix(1,0,0,-1.2428528,297.27226,317.57232)",
     "matrix(1,0,0,-1.2428528,330.47074,317.57232)",
-    "matrix(1,0,0,-1.2428528,396.86771,317.57232)",
     "matrix(1,0,0,-1.2428528,363.66923,317.57232)",
+    "matrix(1,0,0,-1.2428528,396.86771,317.57232)",
     "matrix(1,0,0,-1.2428528,430.06618,317.57232)",
     "matrix(1,0,0,-1.2428528,495.2663,317.54429)",
     "matrix(1,0,0,-1.2428528,528.46479,317.54429)",
     "matrix(1,0,0,-1.2428528,561.66328,317.54429)",
-    "matrix(1,0,0,-1.2428528,628.06025,317.54429)",
     "matrix(1,0,0,-1.2428528,594.86176,317.54429)",
+    "matrix(1,0,0,-1.2428528,628.06025,317.54429)",
     "matrix(1,0,0,-1.2428528,661.25871,317.54429)",
 )
 
@@ -164,6 +164,18 @@ def checker_style(color: str = "#000000") -> str:
 
 def filled_engrave_style() -> str:
     return "fill:#ff0000;fill-opacity:1;stroke:none"
+
+
+def alternating_pip_engrave_width(
+    side: str,
+    pip_index: int,
+    pip_engrave_width: float,
+) -> float:
+    """Return thick/thin widths with opposing top/bottom parity."""
+    if side not in ("top", "bottom"):
+        raise ValueError("side must be 'top' or 'bottom'")
+    thick = (pip_index % 2 == 0) if side == "top" else (pip_index % 2 == 1)
+    return pip_engrave_width if thick else pip_engrave_width / 3
 
 
 _PATH_TOKEN = re.compile(
@@ -739,6 +751,7 @@ def build_board(
     separate_template: bool = False,
     pip_engrave_width: float | None = None,
     rosette_engrave_width: float | None = None,
+    alternate_pips: bool = True,
 ) -> Path | None:
     if checker_size <= 0:
         raise ValueError("checker_size must be greater than zero")
@@ -790,6 +803,13 @@ def build_board(
         horizontal_offset = pip_group_horizontal_offset(
             pip_index, checker_size, layout_rosette_ratio
         )
+        engrave_width = (
+            alternating_pip_engrave_width(
+                "top", pip_index, resolved_pip_engrave_width
+            )
+            if alternate_pips
+            else resolved_pip_engrave_width
+        )
         add_pip(
             pip_etch_layer,
             pip_cut_layer,
@@ -800,7 +820,7 @@ def build_board(
                     "top", pip_index, checker_size, layout_rosette_ratio
                 ),
             ),
-            resolved_pip_engrave_width,
+            engrave_width,
             cut,
         )
 
@@ -808,6 +828,13 @@ def build_board(
         pip_index = index + 1
         horizontal_offset = pip_group_horizontal_offset(
             pip_index, checker_size, layout_rosette_ratio
+        )
+        engrave_width = (
+            alternating_pip_engrave_width(
+                "bottom", pip_index, resolved_pip_engrave_width
+            )
+            if alternate_pips
+            else resolved_pip_engrave_width
         )
         add_pip(
             pip_etch_layer,
@@ -819,7 +846,7 @@ def build_board(
                     "bottom", pip_index, checker_size, layout_rosette_ratio
                 ),
             ),
-            resolved_pip_engrave_width,
+            engrave_width,
             cut,
         )
 
@@ -1062,6 +1089,15 @@ def get_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--alternate-pips",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "alternate thick and one-third-width pip engraving, with opposing "
+            "top/bottom parity (default: on)"
+        ),
+    )
+    parser.add_argument(
         "--rosette-engrave-width",
         type=positive_size,
         default=None,
@@ -1095,6 +1131,7 @@ def main() -> None:
         separate_template=arguments.separate_template,
         pip_engrave_width=arguments.pip_engrave_width,
         rosette_engrave_width=arguments.rosette_engrave_width,
+        alternate_pips=arguments.alternate_pips,
     )
     print(f"Wrote {arguments.out}")
     if template_output is not None:

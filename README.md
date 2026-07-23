@@ -145,3 +145,9 @@ The generator uses [svgwrite](https://github.com/mozman/svgwrite) and encodes pi
 
 - Scaling is uniform: `--checker-size` multiplies all geometry and the canvas via `scale_factor(checker_size / 32)`.
 - Stroke width is fixed at **0.301517 mm** with `vector-effect: non-scaling-stroke`.
+- By default, adjacent pip etches alternate between `--pip-engrave-width` and
+  one-third of that width. The top and bottom rows use opposite parity so
+  vertically opposing pips have different weights. Use `--no-alternate-pips`
+  for uniform etches. In cut mode the red pip etches alternate, but the black
+  cut outlines retain their normal centerline width; in no-cut mode the red
+  replacement outlines alternate with the other pip etches.
