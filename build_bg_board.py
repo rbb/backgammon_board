@@ -7,6 +7,7 @@ import argparse
 import math
 import re
 from pathlib import Path
+from typing import Literal
 
 import argcomplete
 import svgwrite
@@ -20,7 +21,7 @@ DEFAULT_CHECKER_SIZE = 32.0
 DEFAULT_TEMPLATE_MARGIN = 0.5
 DEFAULT_TEMPLATE_ARC_RATIO = 1 / 6
 DEFAULT_PIP_ENGRAVE_WIDTH = 2.0
-DEFAULT_ROSETTE_ENGRAVE_WIDTH = 1.0
+DEFAULT_ROSETTE_ENGRAVE_WIDTH = 0.1 
 ROSETTE_SETS = 21
 LINE_WIDTH = 0.301517
 PIP_BASE_LEFT = 55.769252
@@ -542,14 +543,23 @@ def canvas_bounds(
     return left, top, right - left, bottom - top
 
 
+def playing_half_canvas_bounds(
+    playing_half: PlayingHalf,
+    checker_size: float,
+    rosette_ratio: float = 1.0,
+) -> tuple[float, float, float, float]:
+    """Return one playing half's outer-frame bounds."""
+    _, _, right_outer, left_outer = border_rectangles(checker_size, rosette_ratio)
+    x, y, width, height = left_outer if playing_half == "left" else right_outer
+    margin = LINE_WIDTH / 2
+    return x - margin, y - margin, width + 2 * margin, height + 2 * margin
+
+
 def half_canvas_bounds(
     checker_size: float, rosette_ratio: float = 1.0
 ) -> tuple[float, float, float, float]:
     """Return the left half's outer-frame bounds."""
-    _, _, _, left_outer = border_rectangles(checker_size, rosette_ratio)
-    x, y, width, height = left_outer
-    margin = LINE_WIDTH / 2
-    return x - margin, y - margin, width + 2 * margin, height + 2 * margin
+    return playing_half_canvas_bounds("left", checker_size, rosette_ratio)
 
 
 def half_centers(
@@ -696,9 +706,24 @@ def checker_template_outline(
     return " ".join(path) + " Z"
 
 
-def template_output_path(output: Path) -> Path:
-    """Return the checker-template SVG path derived from the main output."""
-    return output.with_stem(f"{output.stem}_template")
+PlayingHalf = Literal["left", "right"]
+
+
+def template_output_path(output: Path, playing_half: PlayingHalf | None = None) -> Path:
+    """Return a checker-template SVG path derived from the main output."""
+    if playing_half is None:
+        return output.with_stem(f"{output.stem}_template")
+    return output.with_stem(f"{output.stem}_template_{playing_half}")
+
+
+def template_output_paths(output: Path, *, half_board: bool) -> tuple[Path, ...]:
+    """Return checker-template SVG paths for a board export."""
+    if half_board:
+        return (template_output_path(output),)
+    return (
+        template_output_path(output, "left"),
+        template_output_path(output, "right"),
+    )
 
 
 def _new_drawing(
@@ -749,6 +774,73 @@ def verify_checker_layout(checker_size: float, rosette_ratio: float = 1.0) -> No
             assert abs(current_y - previous_y - direction * checker_size) < 1e-9
 
 
+def _add_checker_templates(
+    drawing: svgwrite.Drawing,
+    *,
+    checker_size: float,
+    layout_rosette_ratio: float,
+    scaled_template_margin: float,
+    template_arc_ratio: float,
+    cut: bool,
+    playing_half: PlayingHalf | None = None,
+) -> None:
+    """Add the checker-template layer for one or both playing halves."""
+    checker_templates = add_layer(drawing, "layer6", "Checker Template")
+    rectangles = border_rectangles(checker_size, layout_rosette_ratio)
+    if playing_half == "left":
+        inner_rectangles = ((1, rectangles[0]),)
+    elif playing_half == "right":
+        inner_rectangles = ((2, rectangles[1]),)
+    else:
+        inner_rectangles = tuple(enumerate(rectangles[:2], start=1))
+
+    for border_index, (x, y, width, height) in inner_rectangles:
+        inset_width = width - 2 * scaled_template_margin
+        inset_height = height - 2 * scaled_template_margin
+        if inset_width <= 0 or inset_height <= 0:
+            raise ValueError("template_margin is too large for the inner borders")
+        checker_templates.add(
+            drawing.rect(
+                insert=(x + scaled_template_margin, y + scaled_template_margin),
+                size=(inset_width, inset_height),
+                id=f"checker_template_border_{border_index}",
+                style=cut_style("#000000" if cut else "#ff0000"),
+            )
+        )
+
+    for group_index, (side, pip_index, count) in enumerate(CHECKER_STACKS, start=1):
+        if playing_half == "left" and pip_index > 6:
+            continue
+        if playing_half == "right" and pip_index <= 6:
+            continue
+        centers = checker_centers(
+            side,
+            pip_index,
+            count,
+            checker_size,
+            pip_group_horizontal_offset(
+                pip_index, checker_size, layout_rosette_ratio
+            ),
+            layout_rosette_ratio,
+        )
+        checker_templates.add(
+            svgwrite.path.Path(
+                id=f"checker_template_stack_{group_index}",
+                d=checker_template_outline(
+                    centers,
+                    checker_size,
+                    scaled_template_margin,
+                    template_arc_ratio,
+                ),
+                transform=(
+                    f"translate(0,{checker_stack_translation(side, pip_index, checker_size, layout_rosette_ratio):g})"
+                ),
+                style=cut_style("#000000" if cut else "#ff0000"),
+                debug=False,
+            )
+        )
+
+
 def build_board(
     output: Path = DEFAULT_OUTPUT,
     checker_size: float = DEFAULT_CHECKER_SIZE,
@@ -763,7 +855,7 @@ def build_board(
     pip_engrave_width: float | None = None,
     rosette_engrave_width: float | None = None,
     alternate_pips: bool = True,
-) -> Path | None:
+) -> tuple[Path, ...] | None:
     if checker_size <= 0:
         raise ValueError("checker_size must be greater than zero")
     if template_margin < 0:
@@ -797,15 +889,39 @@ def build_board(
     drawing = _new_drawing(
         output, canvas_x, canvas_y, canvas_width, canvas_height
     )
-    template_output: Path | None = None
+    template_outputs: tuple[Path, ...] | None = None
+    template_drawings: list[tuple[Path, svgwrite.Drawing, PlayingHalf | None]] = []
     if separate_template:
-        template_output = template_output_path(output)
-        template_drawing = _new_drawing(
-            template_output, canvas_x, canvas_y, canvas_width, canvas_height
-        )
-        template_target = template_drawing
-    else:
-        template_target = drawing
+        if half:
+            template_path = template_output_path(output)
+            template_outputs = (template_path,)
+            template_drawings.append(
+                (
+                    template_path,
+                    _new_drawing(
+                        template_path,
+                        *half_canvas_bounds(checker_size, layout_rosette_ratio),
+                    ),
+                    "left",
+                )
+            )
+        else:
+            template_outputs = template_output_paths(output, half_board=False)
+            for playing_half, template_path in zip(
+                ("left", "right"), template_outputs, strict=True
+            ):
+                template_drawings.append(
+                    (
+                        template_path,
+                        _new_drawing(
+                            template_path,
+                            *playing_half_canvas_bounds(
+                                playing_half, checker_size, layout_rosette_ratio
+                            ),
+                        ),
+                        playing_half,
+                    )
+                )
     pip_etch_layer = add_layer(drawing, "layer1", "Pip Etch")
     pip_cut_layer = add_layer(drawing, "layer3", "Pip Cut")
     pip_count = 6 if half else len(TOP_PIP_TRANSFORMS)
@@ -919,58 +1035,32 @@ def build_board(
                 )
             checkers_layer.add(checker_group)
 
-    checker_templates = add_layer(
-        template_target, "layer6", "Checker Template"
-    )
-    rectangles = border_rectangles(checker_size, layout_rosette_ratio)
-    inner_rectangles = ((1, rectangles[0]),) if half else tuple(
-        enumerate(rectangles[:2], start=1)
-    )
-    for border_index, (x, y, width, height) in inner_rectangles:
-        inset_width = width - 2 * scaled_template_margin
-        inset_height = height - 2 * scaled_template_margin
-        if inset_width <= 0 or inset_height <= 0:
-            raise ValueError("template_margin is too large for the inner borders")
-        checker_templates.add(
-            template_target.rect(
-                insert=(x + scaled_template_margin, y + scaled_template_margin),
-                size=(inset_width, inset_height),
-                id=f"checker_template_border_{border_index}",
-                style=cut_style("#000000" if cut else "#ff0000"),
+    if separate_template:
+        assert template_outputs is not None
+        for template_path, template_drawing, playing_half in template_drawings:
+            _add_checker_templates(
+                template_drawing,
+                checker_size=checker_size,
+                layout_rosette_ratio=layout_rosette_ratio,
+                scaled_template_margin=scaled_template_margin,
+                template_arc_ratio=template_arc_ratio,
+                cut=cut,
+                playing_half=playing_half,
             )
-        )
-
-    for group_index, (side, pip_index, count) in enumerate(CHECKER_STACKS, start=1):
-        if half and pip_index > 6:
-            continue
-        centers = checker_centers(
-            side,
-            pip_index,
-            count,
-            checker_size,
-            pip_group_horizontal_offset(
-                pip_index, checker_size, layout_rosette_ratio
-            ),
-            layout_rosette_ratio,
-        )
-        checker_templates.add(
-            svgwrite.path.Path(
-                id=f"checker_template_stack_{group_index}",
-                d=checker_template_outline(
-                    centers,
-                    checker_size,
-                    scaled_template_margin,
-                    template_arc_ratio,
-                ),
-                transform=(
-                    f"translate(0,{checker_stack_translation(side, pip_index, checker_size, layout_rosette_ratio):g})"
-                ),
-                style=cut_style("#000000" if cut else "#ff0000"),
-                debug=False,
-            )
+            template_drawing.save(pretty=True)
+    else:
+        _add_checker_templates(
+            drawing,
+            checker_size=checker_size,
+            layout_rosette_ratio=layout_rosette_ratio,
+            scaled_template_margin=scaled_template_margin,
+            template_arc_ratio=template_arc_ratio,
+            cut=cut,
+            playing_half="left" if half else None,
         )
 
     border_layer = add_layer(drawing, "layer5", "Border")
+    rectangles = border_rectangles(checker_size, layout_rosette_ratio)
     indexed_rectangles = (
         ((1, rectangles[0]), (4, rectangles[3]))
         if half
@@ -989,11 +1079,7 @@ def build_board(
         )
 
     drawing.save(pretty=True)
-    if separate_template:
-        assert template_output is not None
-        template_drawing.save(pretty=True)
-        return template_output
-    return None
+    return template_outputs
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -1085,8 +1171,9 @@ def get_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "write the checker template layer to a separate _template.svg "
-            "(default: include it in the main output)"
+            "write checker template layers to separate _template.svg files "
+            "(full board: left and right halves; half board: one file; "
+            "default: include templates in the main output)"
         ),
     )
     parser.add_argument(
@@ -1129,7 +1216,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     arguments = parse_args()
-    template_output = build_board(
+    template_outputs = build_board(
         output=arguments.out,
         checker_size=arguments.checker_size,
         template_margin=arguments.template_margin,
@@ -1145,8 +1232,9 @@ def main() -> None:
         alternate_pips=arguments.alternate_pips,
     )
     print(f"Wrote {arguments.out}")
-    if template_output is not None:
-        print(f"Wrote {template_output}")
+    if template_outputs is not None:
+        for template_output in template_outputs:
+            print(f"Wrote {template_output}")
 
 
 if __name__ == "__main__":
