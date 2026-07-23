@@ -104,7 +104,7 @@ BOTTOM_PIP_TRANSFORMS = (
     "matrix(1,0,0,-1.2428528,661.25871,317.54429)",
 )
 
-# (board side, one-based pip index, checker count)
+# (board side, one-based position from the left, checker count)
 #
 # The nearest checker is tangent to the pip's flat base and sloped sides at
 # the widest point; the rest are separated by exactly one checker diameter.
@@ -118,6 +118,17 @@ CHECKER_STACKS = (
     ("bottom", 7, 5),
     ("top", 12, 2),
 )
+
+
+def pip_number(side: str, position: int) -> int:
+    """Return standard backgammon numbering for a left-to-right row position."""
+    if side == "bottom":
+        return 13 - position
+    if side == "top":
+        return 12 + position
+    raise ValueError("side must be 'top' or 'bottom'")
+
+
 def add_layer(drawing: svgwrite.Drawing, identifier: str, label: str) -> svgwrite.container.Group:
     """Create an Inkscape-compatible layer."""
     layer = drawing.g(id=identifier, style="display:inline")
@@ -813,7 +824,7 @@ def build_board(
         add_pip(
             pip_etch_layer,
             pip_cut_layer,
-            f"top_pip_{pip_index}",
+            f"pip_{pip_number('top', pip_index)}",
             _compose_matrices(
                 (1, 0, 0, 1, horizontal_offset, 0),
                 _pip_matrix(
@@ -839,7 +850,7 @@ def build_board(
         add_pip(
             pip_etch_layer,
             pip_cut_layer,
-            f"bottom_pip_{pip_index}",
+            f"pip_{pip_number('bottom', pip_index)}",
             _compose_matrices(
                 (1, 0, 0, 1, horizontal_offset, 0),
                 _pip_matrix(
