@@ -20,6 +20,23 @@ build-bg-board
 
 Default output is `backgammon_board.svg` in the project root.
 
+### Bash tab completion
+
+After `uv sync`, load completions in the current shell:
+
+```bash
+source completions/install.sh
+```
+
+To install permanently:
+
+```bash
+./completions/install.sh --persist
+source ~/.bashrc
+```
+
+Then `build-bg-board` and `build-hex-rosette` complete flags and file paths (e.g. `--out`, `--output`).
+
 ## CLI
 
 ```bash

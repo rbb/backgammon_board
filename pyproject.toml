@@ -8,22 +8,28 @@ version = "0.1.0"
 description = "Generate backgammon board SVG drawings"
 requires-python = ">=3.10"
 dependencies = [
+    "argcomplete>=3.5,<4",
+    "shapely>=2.1.2",
     "svgwrite>=1.4,<2",
 ]
 
 [project.scripts]
 build-bg-board = "build_bg_board:main"
-build-rosette = "build_rosette_recursive_hex:main"
-build-rosette-recursive-hex = "build_rosette_recursive_hex:main"
-build-rosette-interlocking-hex-lattice = "build_rosette_interlocking_hex_Lattice_alg:main"
-build-rosette-mesh = "build_rosette_recursive_hex_mesh:main"
+#build-rosette = "build_rosette_recursive_hex:main"
+#build-rosette-recursive-hex = "build_rosette_recursive_hex:main"
+#build-rosette-interlocking-hex-lattice = "build_rosette_interlocking_hex_Lattice_alg:main"
+#build-rosette-mesh = "build_rosette_recursive_hex_mesh:main"
 build-hex-rosette = "build_hex_rosette:main"
+
+[project.entry-points."argcomplete2.scripts"]
+build-bg-board = "build_bg_board:get_parser"
+build-hex-rosette = "build_hex_rosette:get_parser"
 
 [tool.setuptools]
 py-modules = [
     "build_bg_board",
-    "build_rosette_recursive_hex",
-    "build_rosette_interlocking_hex_Lattice_alg",
-    "build_rosette_recursive_hex_mesh",
+    #"build_rosette_recursive_hex",
+    #"build_rosette_interlocking_hex_Lattice_alg",
+    #"build_rosette_recursive_hex_mesh",
     "build_hex_rosette",
 ]

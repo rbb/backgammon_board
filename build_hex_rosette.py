@@ -9,7 +9,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import argcomplete
 import svgwrite
+from shapely import BufferCapStyle, BufferJoinStyle
+from shapely.geometry import LineString, Polygon
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 DEFAULT_OUTPUT = Path("hex_rosette.svg")
 DEFAULT_DIAMETER = 100.0
@@ -20,8 +25,8 @@ DEFAULT_SET_ROTATION = 17.0
 DEFAULT_STROKE_WIDTH = 0.05
 DEFAULT_FILL_COLOR = "white"
 
-STROKE_OUTER = "black"
-STROKE_INNER = "red"
+STROKE_OUTER = "#000000"
+STROKE_INNER = "#ff0000"
 
 # Tip-up in SVG (Y-down) using cos/sin: angle -90°. Visual CCW subtracts from this.
 TIP_UP_DEG = -90.0
@@ -48,6 +53,10 @@ class HexRosetteParams:
     fill_color: str = DEFAULT_FILL_COLOR
     center_x: float | None = None
     center_y: float | None = None
+    filled_engraving: bool = False
+    engrave_width: float | None = None
+    cut: bool = True
+    draw_fills: bool = True
 
     @property
     def center(self) -> Point:
@@ -337,6 +346,64 @@ def color_hex_edges(
     return colored
 
 
+def _ring_path(coordinates: object) -> str:
+    """Serialize one Shapely linear ring as an SVG closed subpath."""
+    points = list(coordinates)  # type: ignore[arg-type]
+    if len(points) < 4:
+        return ""
+    commands = [f"M {points[0][0]:.12g},{points[0][1]:.12g}"]
+    commands.extend(f"L {x:.12g},{y:.12g}" for x, y in points[1:-1])
+    commands.append("Z")
+    return " ".join(commands)
+
+
+def _polygon_path(polygon: Polygon) -> str:
+    """Serialize a polygon's outer edge and inner holes as subpaths."""
+    rings = [_ring_path(polygon.exterior.coords)]
+    rings.extend(_ring_path(interior.coords) for interior in polygon.interiors)
+    return " ".join(ring for ring in rings if ring)
+
+
+def _geometry_path(geometry: BaseGeometry) -> str:
+    """Serialize all polygon contours in a Shapely geometry."""
+    if geometry.is_empty:
+        return ""
+    if isinstance(geometry, Polygon):
+        return _polygon_path(geometry)
+    if hasattr(geometry, "geoms"):
+        return " ".join(
+            path
+            for part in geometry.geoms
+            if (path := _geometry_path(part))
+        )
+    return ""
+
+
+def filled_band_path(
+    subpaths: tuple[tuple[tuple[Point, ...], bool], ...],
+    width: float,
+) -> str:
+    """Return unified outer/inner contours around supplied centerlines."""
+    lines: list[LineString] = []
+    for points, is_closed in subpaths:
+        if len(points) < 2:
+            continue
+        coordinates = list(points)
+        if is_closed and coordinates[-1] != coordinates[0]:
+            coordinates.append(coordinates[0])
+        lines.append(LineString(coordinates))
+    if not lines:
+        return ""
+    centerlines = unary_union(lines)
+    engraving = centerlines.buffer(
+        width / 2,
+        quad_segs=16,
+        cap_style=BufferCapStyle.round,
+        join_style=BufferJoinStyle.round,
+    )
+    return _geometry_path(engraving)
+
+
 def add_line(
     parent: svgwrite.base.BaseElement,
     a: Point,
@@ -354,6 +421,28 @@ def add_line(
             stroke=stroke,
             stroke_width=stroke_width,
             stroke_linecap="round",
+        )
+    )
+
+
+def add_filled_line(
+    parent: svgwrite.base.BaseElement,
+    a: Point,
+    b: Point,
+    *,
+    fill: str,
+    width: float,
+) -> None:
+    """Add one fill-only outlined band centered on segment ``a``–``b``."""
+    if segment_length(a, b) < _EPS:
+        return
+    parent.add(
+        svgwrite.path.Path(
+            d=filled_band_path((((a, b), False),), width),
+            fill=fill,
+            fill_rule="evenodd",
+            stroke="none",
+            debug=False,
         )
     )
 
@@ -379,6 +468,8 @@ def add_hex_rosette(
     params: HexRosetteParams,
 ) -> None:
     """Draw the hex rosette into ``parent`` at ``params.center``."""
+    if params.engrave_width is not None and params.engrave_width <= 0:
+        raise ValueError("engrave_width must be greater than zero")
     center = params.center
     fill = paint_color(params.fill_color)
     radii = set_radii(params)
@@ -392,15 +483,46 @@ def add_hex_rosette(
         is_last_set = set_index == len(radii) - 1
         draw_fill = params.fill_last_set or not is_last_set
         for rotation_deg in rotations:
-            if draw_fill:
+            if params.draw_fills and draw_fill:
                 add_filled_hex(parent, center, radius, rotation_deg, fill)
-            for a, b, color in color_hex_edges(
+            colored_edges = color_hex_edges(
                 center,
                 radius,
                 rotation_deg,
                 outer_rotations if split_outer else rotations,
                 all_outer=not split_outer,
-            ):
+            )
+            engraving_segments: list[Segment] = []
+            line_segments: list[tuple[Point, Point, str]] = []
+            for a, b, color in colored_edges:
+                effective_color = color if params.cut else STROKE_INNER
+                if params.filled_engraving and effective_color == STROKE_INNER:
+                    engraving_segments.append((a, b))
+                else:
+                    line_segments.append((a, b, effective_color))
+
+            if engraving_segments:
+                engraving_width = (
+                    params.stroke_width
+                    if params.engrave_width is None
+                    else params.engrave_width
+                )
+                parent.add(
+                    svgwrite.path.Path(
+                        d=filled_band_path(
+                            tuple(
+                                ((a, b), False)
+                                for a, b in engraving_segments
+                            ),
+                            engraving_width,
+                        ),
+                        fill=STROKE_INNER,
+                        fill_rule="evenodd",
+                        stroke="none",
+                        debug=False,
+                    )
+                )
+            for a, b, color in line_segments:
                 add_line(
                     parent,
                     a,
@@ -467,7 +589,7 @@ def parse_rotations(value: str) -> tuple[float, ...]:
         ) from exc
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     geometry = parser.add_argument_group("geometry")
     output = parser.add_argument_group("output")
@@ -566,6 +688,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f'fill color, or "none" for transparent (default: {DEFAULT_FILL_COLOR})',
     )
 
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = get_parser()
+    argcomplete.autocomplete(parser)
     return parser.parse_args(argv)
 
 
