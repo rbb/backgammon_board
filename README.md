@@ -77,7 +77,7 @@ The generator writes Inkscape layers (`inkscape:groupmode="layer"`). Configure y
 | `layer3` | Pip Cut | black | Cut | 24 pip units (black pip outline each) |
 | `layer4` | Checkers | black | Reference / optional cut | 30 circles at standard starting positions |
 | `layer5` | Border | black | Cut | Inner and outer frames for both player halves |
-| `layer6` | Checker Template | black | Cut (jig) | Per-stack cut outlines and inset inner-border rects |
+| `layer6` | Checker Template | black/red | Cut/etch (jig) | Per-stack cut outlines, black-checker etch rings, and inset inner-border rects |
 
 **Production board:** hide or omit `layer4` (checker reference) and `layer6` (placement jig). Use `layer1` for pip etch and `layer3` for pip cut.
 
@@ -100,11 +100,11 @@ Eight stacks, 30 checkers total (standard 15 per player):
 | Board side | Pip index | Checkers |
 |------------|-----------|----------|
 | top | 1 | 5 |
-| top | 4 | 3 |
+| top | 5 | 3 |
 | top | 7 | 5 |
 | top | 12 | 2 |
 | bottom | 1 | 5 |
-| bottom | 4 | 3 |
+| bottom | 5 | 3 |
 | bottom | 7 | 5 |
 | bottom | 12 | 2 |
 
@@ -112,7 +112,12 @@ Checker centers are placed tangent to each pip's flat base, then stacked at one 
 
 ### Checker template (`layer6`)
 
-Optional jig layer: expanded outlines around each starting stack plus inset rectangles matching the inner playing-area borders. Tune with `--template-margin` and `--template-arc-ratio`.
+Optional jig layer: expanded cut outlines around each starting stack plus inset
+rectangles matching the inner playing-area borders. Stacks on black starting
+pips 6, 8, 13, and 24 also receive two red etch outlines, spaced 1 mm and 2 mm
+outside the cut outline for 32 mm checkers. These offsets scale with
+`--checker-size`. Tune the cut outlines with `--template-margin` and
+`--template-arc-ratio`.
 
 ## Project files
 

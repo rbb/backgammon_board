@@ -20,6 +20,7 @@ SVG_SIZE = (600, 450)
 DEFAULT_CHECKER_SIZE = 32.0
 DEFAULT_TEMPLATE_MARGIN = 0.5
 DEFAULT_TEMPLATE_ARC_RATIO = 1 / 6
+DEFAULT_BLACK_CHECKER_ETCH_OFFSET_MM = 1.5
 DEFAULT_PIP_ENGRAVE_WIDTH = 2.0
 DEFAULT_ROSETTE_ENGRAVE_WIDTH = 0.1 
 ROSETTE_SETS = 21
@@ -111,14 +112,15 @@ BOTTOM_PIP_TRANSFORMS = (
 # the widest point; the rest are separated by exactly one checker diameter.
 CHECKER_STACKS = (
     ("top", 1, 5),
-    ("top", 4, 3),
+    ("top", 5, 3),
     ("top", 7, 5),
     ("bottom", 12, 2),
     ("bottom", 1, 5),
-    ("bottom", 4, 3),
+    ("bottom", 5, 3),
     ("bottom", 7, 5),
     ("top", 12, 2),
 )
+BLACK_CHECKER_PIPS = frozenset({6, 8, 13, 24})
 
 
 def pip_number(side: str, position: int) -> int:
@@ -143,6 +145,15 @@ def add_layer(drawing: svgwrite.Drawing, identifier: str, label: str) -> svgwrit
 def scale_factor(checker_size: float) -> float:
     """Return the scale relative to the original 32 mm checker design."""
     return checker_size / DEFAULT_CHECKER_SIZE
+
+
+def black_checker_etch_offset_mm(checker_size: float, ring: int) -> float:
+    """Return a black-checker etch ring's scaled offset from the cut outline."""
+    if ring < 1:
+        raise ValueError("ring must be at least one")
+    return DEFAULT_BLACK_CHECKER_ETCH_OFFSET_MM * ring * scale_factor(
+        checker_size
+    )
 
 
 def board_height_expansion(checker_size: float, rosette_ratio: float) -> float:
@@ -646,6 +657,7 @@ def checker_template_outline(
     checker_size: float,
     template_margin: float,
     template_arc_ratio: float,
+    outline_offset: float = 0.0,
 ) -> str:
     """Return a closed, expanded outline around a vertically stacked checker set."""
     if not centers:
@@ -659,14 +671,26 @@ def checker_template_outline(
         raise ValueError("template_margin must not be negative")
     if template_arc_ratio <= 0:
         raise ValueError("template_arc_ratio must be greater than zero")
-    radius = checker_size / 2 + template_margin
-    arc_inset = checker_size * template_arc_ratio
+    radius = checker_size / 2 + template_margin + outline_offset
+    arc_inset = checker_size * template_arc_ratio + outline_offset
+    if radius <= 0:
+        raise ValueError("outline_offset makes the checker radius non-positive")
     if arc_inset >= radius:
         raise ValueError(
             "template_arc_ratio must keep arc endpoints inside the expanded checker radius"
         )
     arc_height = math.sqrt(radius**2 - arc_inset**2)
     ordered_centers = tuple(sorted(centers, key=lambda center: center[1]))
+    if len(ordered_centers) > 1:
+        half_spacing = min(
+            (next_center[1] - center[1]) / 2
+            for center, next_center in zip(
+                ordered_centers, ordered_centers[1:]
+            )
+        )
+        if arc_height > half_spacing:
+            arc_height = half_spacing
+            arc_inset = math.sqrt(radius**2 - arc_height**2)
 
     def point(x: float, y: float) -> str:
         return f"{x:.12g},{y:.12g}"
@@ -685,7 +709,9 @@ def checker_template_outline(
         )
         if index < len(ordered_centers) - 1:
             next_y = ordered_centers[index + 1][1]
-            path.append(f"L {point(center_x + arc_inset, next_y - arc_height)}")
+            connector_y = next_y - arc_height
+            if connector_y > center_y + arc_height + 1e-9:
+                path.append(f"L {point(center_x + arc_inset, connector_y)}")
 
     last_y = ordered_centers[-1][1]
     path.append(
@@ -701,7 +727,9 @@ def checker_template_outline(
         )
         if index:
             previous_y = ordered_centers[index - 1][1]
-            path.append(f"L {point(center_x - arc_inset, previous_y + arc_height)}")
+            connector_y = previous_y + arc_height
+            if connector_y < center_y - arc_height - 1e-9:
+                path.append(f"L {point(center_x - arc_inset, connector_y)}")
 
     return " ".join(path) + " Z"
 
@@ -823,6 +851,9 @@ def _add_checker_templates(
             ),
             layout_rosette_ratio,
         )
+        translation = checker_stack_translation(
+            side, pip_index, checker_size, layout_rosette_ratio
+        )
         checker_templates.add(
             svgwrite.path.Path(
                 id=f"checker_template_stack_{group_index}",
@@ -832,13 +863,31 @@ def _add_checker_templates(
                     scaled_template_margin,
                     template_arc_ratio,
                 ),
-                transform=(
-                    f"translate(0,{checker_stack_translation(side, pip_index, checker_size, layout_rosette_ratio):g})"
-                ),
+                transform=f"translate(0,{translation:g})",
                 style=cut_style("#000000" if cut else "#ff0000"),
                 debug=False,
             )
         )
+        if pip_number(side, pip_index) in BLACK_CHECKER_PIPS:
+            for ring in (1, 2):
+                checker_templates.add(
+                    svgwrite.path.Path(
+                        id=(
+                            f"checker_template_stack_{group_index}"
+                            f"_red_etch_{ring}"
+                        ),
+                        d=checker_template_outline(
+                            centers,
+                            checker_size
+                            + black_checker_etch_offset_mm(checker_size, ring),
+                            scaled_template_margin,
+                            template_arc_ratio,
+                        ),
+                        transform=f"translate(0,{translation:g})",
+                        style=line_style("#ff0000"),
+                        debug=False,
+                    )
+                )
 
 
 def build_board(
